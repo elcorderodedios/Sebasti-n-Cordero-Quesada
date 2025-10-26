@@ -1,0 +1,357 @@
+@startuml ProductionLineSimulator
+
+title Production Line Simulator - Class Diagram
+
+package "Model Layer" {
+    enum ProductType {
+        Washer
+        Dryer
+        Refrigerator
+        Dishwasher
+        Oven
+    }
+    
+    enum ProductState {
+        Created
+        AtIntake
+        AtAssembler
+        AtQualityInspection
+        AtPackaging
+        AtShipping
+        Finished
+        Rejected
+        InRework
+    }
+    
+    class Product {
+        - QString m_id
+        - ProductType m_type
+        - ProductState m_currentState
+        - QDateTime m_createdTime
+        - QStringList m_trace
+        - bool m_inRework
+        
+        + Product(ProductType type)
+        + QString getId() const
+        + ProductType getType() const
+        + ProductState getCurrentState() const
+        + void advanceState()
+        + void setState(ProductState state)
+        + void addTraceEntry(QString station)
+        + QString showInfo() const
+        + QJsonObject toJson() const
+        + void fromJson(QJsonObject json)
+    }
+}
+
+package "Core Layer" {
+    template Buffer<T> {
+        - QQueue<T> m_queue
+        - QMutex m_mutex
+        - QSemaphore m_spacesAvailable
+        - QSemaphore m_itemsAvailable
+        - int m_capacity
+        - bool m_stopping
+        
+        + Buffer(int capacity)
+        + bool push(T item)
+        + bool pop(T& item)
+        + bool tryPush(T item)
+        + bool tryPop(T& item)
+        + int size() const
+        + bool isEmpty() const
+        + bool isFull() const
+        + void stop()
+        + void clear()
+    }
+    
+    enum StationState {
+        Idle
+        Running
+        Paused
+        Blocked
+        Stopping
+        Stopped
+        Error
+    }
+    
+    abstract class WorkStation {
+        # QString m_name
+        # QAtomicInt m_state
+        # Buffer<Product>* m_inputBuffer
+        # Buffer<Product>* m_outputBuffer
+        # QMutex m_controlMutex
+        # QWaitCondition m_pauseCondition
+        # int m_minProcessingTime
+        # int m_maxProcessingTime
+        # double m_failureRate
+        
+        + WorkStation(QString name)
+        + void startStation()
+        + void pauseStation()
+        + void resumeStation()
+        + void stopStation()
+        + StationState getState() const
+        + QString getName() const
+        + void setInputBuffer(Buffer<Product>* buffer)
+        + void setOutputBuffer(Buffer<Product>* buffer)
+        # void run() override
+        # {abstract} bool processProduct(Product* product)
+        # bool shouldRejectProduct() const
+        # void setState(StationState state)
+        
+        <<signals>>
+        + stateChanged(QString, StationState)
+        + productProcessed(QString, QString)
+        + productRejected(QString, QString)
+        + errorOccurred(QString, QString)
+    }
+    
+    class ThreadManager {
+        - QMutex m_threadsMutex
+        - QList<ManagedThread*> m_threads
+        - QTimer* m_healthTimer
+        - bool m_healthMonitoringEnabled
+        
+        + ThreadManager(QObject* parent)
+        + void registerThread(QThread* thread, QString name)
+        + void unregisterThread(QThread* thread)
+        + bool startThread(QString name)
+        + bool stopThread(QString name)
+        + QList<ThreadInfo> getThreadInfo() const
+        + int getActiveThreadCount() const
+        + void performCleanup()
+        
+        <<signals>>
+        + threadRegistered(QString)
+        + threadStarted(QString)
+        + threadStopped(QString)
+        + cleanupPerformed(int)
+    }
+    
+    enum ProductionMode {
+        ThreadsOnly
+        ProcessesWithIPC
+    }
+    
+    class ProductionController {
+        - ProductionMode m_mode
+        - QAtomicInt m_isRunning
+        - QAtomicInt m_isPaused
+        - WorkStation* m_stations[5]
+        - Buffer<Product>* m_buffers[4]
+        - ThreadManager* m_threadManager
+        - StatsAggregator* m_statsAggregator
+        - Logger* m_logger
+        
+        + ProductionController(QObject* parent)
+        + void startProduction()
+        + void pauseProduction()
+        + void stopProduction()
+        + void resetProduction()
+        + void setProductionMode(ProductionMode mode)
+        + bool isRunning() const
+        + QList<WorkStation*> getStations() const
+        
+        <<signals>>
+        + productionStarted()
+        + productionStopped()
+        + productFinished(QString)
+        + statisticsUpdated()
+    }
+}
+
+package "Station Implementations" {
+    class Intake {
+        - int m_productionRate
+        - QTimer* m_productionTimer
+        
+        + Intake(QObject* parent)
+        # bool processProduct(Product* product) override
+        - void generateNewProduct()
+    }
+    
+    class Assembler {
+        + Assembler(QObject* parent)
+        # bool processProduct(Product* product) override
+        - QStringList getAssemblySteps(ProductType type) const
+        - void performAssemblyStep(Product* product, QString step)
+    }
+    
+    class QualityInspection {
+        - double m_reworkRate
+        
+        + QualityInspection(QObject* parent)
+        # bool processProduct(Product* product) override
+        - QList<TestResult> performQualityTests(Product* product)
+        - bool shouldSendToRework(QList<TestResult> results) const
+    }
+    
+    class Packaging {
+        + Packaging(QObject* parent)
+        # bool processProduct(Product* product) override
+        - PackageSpec getPackageSpec(ProductType type) const
+        - void performPackagingStep(QString step, Product* product)
+    }
+    
+    class Shipping {
+        - QStringList m_destinations
+        - QStringList m_shippingMethods
+        
+        + Shipping(QObject* parent)
+        # bool processProduct(Product* product) override
+        - ShippingInfo generateShippingInfo(Product* product)
+        - QString generateTrackingNumber() const
+    }
+}
+
+package "Support Systems" {
+    enum LogLevel {
+        Debug
+        Info
+        Warning
+        Error
+        Critical
+    }
+    
+    class Logger {
+        - LogLevel m_minLogLevel
+        - bool m_logToFile
+        - bool m_logToConsole
+        - QString m_logFilePath
+        - QThread* m_workerThread
+        - QMutex m_queueMutex
+        - QQueue<LogEntry> m_logQueue
+        
+        + Logger(QObject* parent)
+        + void log(QString message, LogLevel level)
+        + void info(QString message)
+        + void warning(QString message)
+        + void error(QString message)
+        + void setLogLevel(LogLevel level)
+        + void setLogFilePath(QString path)
+        
+        <<signals>>
+        + logEntryAdded(LogEntry)
+    }
+    
+    class StatsAggregator {
+        - QTimer* m_updateTimer
+        - QVariantMap m_currentStats
+        - QList<QVariantMap> m_history
+        
+        + StatsAggregator(QObject* parent)
+        + void updateStats(QVariantMap stats)
+        + QVariantMap getCurrentStats() const
+        + QList<QVariantMap> getHistory() const
+        + void reset()
+        
+        <<signals>>
+        + statsUpdated(QVariantMap)
+    }
+    
+    class Persistence {
+        + static bool saveState(QString filePath, QJsonObject state)
+        + static QJsonObject loadState(QString filePath)
+        + static QJsonObject serializeProductionState(ProductionController* controller)
+        + static bool restoreProductionState(ProductionController* controller, QJsonObject state)
+        + static QString getConfigPath()
+        + static QString getStatePath()
+    }
+}
+
+package "IPC Layer" {
+    class PipeManager {
+        - QList<QPipe*> m_pipes
+        - QMutex m_pipesMutex
+        
+        + PipeManager(QObject* parent)
+        + bool createPipe(QString name)
+        + bool sendProduct(QString pipeName, Product* product)
+        + Product* receiveProduct(QString pipeName)
+        + void closePipe(QString name)
+    }
+    
+    class SocketComm {
+        - QLocalServer* m_server
+        - QList<QLocalSocket*> m_clients
+        
+        + SocketComm(QObject* parent)
+        + bool startServer(QString serverName)
+        + bool connectToServer(QString serverName)
+        + bool sendData(QByteArray data)
+        + QByteArray receiveData()
+        + void disconnect()
+    }
+}
+
+package "UI Layer" {
+    class MainWindow {
+        - ProductionController* m_controller
+        - QList<StationWidget*> m_stationWidgets
+        - QTextEdit* m_logsTextEdit
+        - QChartView* m_throughputChart
+        - QTableWidget* m_threadsTable
+        - QTimer* m_updateTimer
+        
+        + MainWindow(QWidget* parent)
+        - void setupUI()
+        - void connectSignals()
+        - void updateStationWidget(QString name)
+        - void updateMetrics()
+        
+        <<slots>>
+        + onStartAllClicked()
+        + onStopAllClicked()
+        + onProductionStarted()
+        + onLogEntryAdded(LogEntry)
+    }
+    
+    class StationWidget {
+        - QString m_stationName
+        - QLabel* m_stateLabel
+        - QLabel* m_productLabel
+        - QProgressBar* m_queueProgress
+        - QPushButton* m_controlButtons[3]
+        
+        + StationWidget(QString name, QWidget* parent)
+        + void updateState(StationState state)
+        + void updateMetrics(int queueDepth, double throughput)
+        
+        <<signals>>
+        + startRequested(QString)
+        + pauseRequested(QString)
+        + stopRequested(QString)
+    }
+}
+
+' Relationships
+Product ||--|| ProductType : has
+Product ||--|| ProductState : has
+
+WorkStation <|-- Intake
+WorkStation <|-- Assembler
+WorkStation <|-- QualityInspection
+WorkStation <|-- Packaging
+WorkStation <|-- Shipping
+
+WorkStation --> Buffer : uses
+ProductionController --> WorkStation : manages
+ProductionController --> Buffer : creates
+ProductionController --> ThreadManager : uses
+ProductionController --> Logger : uses
+ProductionController --> StatsAggregator : uses
+
+MainWindow --> ProductionController : controls
+MainWindow --> StationWidget : contains
+MainWindow --> Logger : receives events
+
+ThreadManager --> WorkStation : monitors
+Logger --> LogLevel : uses
+
+PipeManager --> Product : transfers
+SocketComm --> Product : transfers
+
+Buffer --> Product : stores
+
+@enduml
