@@ -1,0 +1,6 @@
+# Archivos de configuración de usuario
+CMakeLists.txt.user
+
+# Carpeta de compilación
+build/
+
